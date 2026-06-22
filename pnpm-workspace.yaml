@@ -1,2 +1,13 @@
 packages:
   - "packages/*"
+# pnpm 11 errors if a dependency's build script is neither approved nor
+# explicitly ignored. None of these need to build for EmpCloud dev: core-js /
+# @scarf print donation banners, esbuild ships its binary via an optional dep,
+# and cpu-features / ssh2 / msgpackr-extract are Monitor deps unused here.
+ignoredBuiltDependencies:
+  - "@scarf/scarf"
+  - core-js
+  - cpu-features
+  - esbuild
+  - msgpackr-extract
+  - ssh2
