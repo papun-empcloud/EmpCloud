@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/api/client";
 import { useAuthStore } from "@/lib/auth-store";
@@ -682,21 +682,29 @@ function RecentApplications({
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [showFilters, setShowFilters] = useState(false);
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(10);
   const hasActiveFilter =
     !!statusFilter || leaveTypeFilter != null || !!dateFrom || !!dateTo;
+
+  // Any filter change can shrink/shift the result set, so reset to page 1 to
+  // avoid landing on a now-out-of-range page that renders empty.
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, leaveTypeFilter, dateFrom, dateTo, perPage]);
+
   // #1613 — Recent Applications used to fetch only 5 rows, so each new
-  // application pushed older ones off the table and there was no way to view
-  // history without leaving the dashboard. Fetch a larger window (50) and
-  // make the body scroll vertically; also surface a "View all" link to the
-  // full Applications page for users who want pagination.
+  // application pushed older ones off the table. It now paginates server-side
+  // so the full history is reachable without leaving the dashboard; a "View
+  // all" link to the dedicated Applications page is still offered.
   const { data, isLoading } = useQuery({
-    queryKey: ["leave-applications-me", statusFilter, leaveTypeFilter, dateFrom, dateTo],
+    queryKey: ["leave-applications-me", statusFilter, leaveTypeFilter, dateFrom, dateTo, page, perPage],
     queryFn: () =>
       api
         .get("/leave/applications/me", {
           params: {
-            page: 1,
-            per_page: 50,
+            page,
+            per_page: perPage,
             status: statusFilter || undefined,
             leave_type_id: leaveTypeFilter || undefined,
             date_from: dateFrom || undefined,
@@ -709,6 +717,9 @@ function RecentApplications({
     // current state, not a 30-second-stale snapshot.
     staleTime: 0,
     refetchOnMount: "always",
+    // Keep the current page visible while the next page loads so paging
+    // doesn't flash an empty table.
+    placeholderData: keepPreviousData,
   });
 
   const applications = data?.data || [];
@@ -801,7 +812,7 @@ function RecentApplications({
           </div>
         )}
       </div>
-      <div className="max-h-96 overflow-y-auto">
+      <div className="overflow-x-auto">
       <table className="min-w-full">
         <thead className="bg-gray-50 border-b border-gray-200">
           <tr>
@@ -909,6 +920,16 @@ function RecentApplications({
         </tbody>
       </table>
       </div>
+      {total > 0 && (
+        <PaginationFooter
+          page={page}
+          perPage={perPage}
+          total={total}
+          onPageChange={setPage}
+          onPerPageChange={setPerPage}
+          label={t('leave.dashboard.applicationsLabel', { defaultValue: 'applications' })}
+        />
+      )}
     </div>
   );
 }
@@ -941,10 +962,18 @@ function PendingApprovals({ leaveTypes }: { leaveTypes: LeaveType[] }) {
   const [appliedSearch, setAppliedSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(10);
   useEffect(() => {
     const id = window.setTimeout(() => setAppliedSearch(search.trim()), 300);
     return () => window.clearTimeout(id);
   }, [search]);
+  // Reset to the first page whenever the active tab, search, or any filter
+  // changes -- otherwise a 5th-page view could carry over to a filter that
+  // only has one page of results and show nothing.
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, departmentId, locationId, leaveTypeFilter, appliedSearch, dateFrom, dateTo, perPage]);
   const hasExtraFilters =
     departmentId != null || locationId != null || leaveTypeFilter != null ||
     !!appliedSearch || !!dateFrom || !!dateTo;
@@ -978,13 +1007,15 @@ function PendingApprovals({ leaveTypes }: { leaveTypes: LeaveType[] }) {
       appliedSearch,
       dateFrom,
       dateTo,
+      page,
+      perPage,
     ],
     queryFn: () =>
       api
         .get("/leave/applications", {
           params: {
-            page: 1,
-            per_page: 50,
+            page,
+            per_page: perPage,
             status: statusFilter === "all" ? undefined : statusFilter,
             department_id: departmentId || undefined,
             location_id: locationId || undefined,
@@ -997,6 +1028,8 @@ function PendingApprovals({ leaveTypes }: { leaveTypes: LeaveType[] }) {
         .then((r) => r.data),
     staleTime: 0,
     refetchOnMount: "always",
+    // Keep the current page visible while the next page loads.
+    placeholderData: keepPreviousData,
   });
 
   const approveMut = useMutation({
@@ -1036,6 +1069,9 @@ function PendingApprovals({ leaveTypes }: { leaveTypes: LeaveType[] }) {
   });
 
   const applications = data?.data || [];
+  // `applications` is the current page; `total` (from the paginated meta) is
+  // the full count across pages and drives the heading + pagination footer.
+  const total = Number(data?.meta?.total ?? applications.length);
   const getTypeName = (id: number) => {
     const lt = leaveTypes.find((x) => x.id === id);
     return lt ? leaveTypeLabel(t, lt) : "-";
@@ -1145,7 +1181,7 @@ function PendingApprovals({ leaveTypes }: { leaveTypes: LeaveType[] }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
             <AlertCircle className={`h-5 w-5 ${panelTone.icon}`} />
-            {headingText} ({applications.length})
+            {headingText} ({total})
           </h2>
           {selectedIds.size > 0 && statusFilter === "pending" && (
             <div className="flex items-center gap-2">
@@ -1432,6 +1468,77 @@ function PendingApprovals({ leaveTypes }: { leaveTypes: LeaveType[] }) {
           ))}
         </tbody>
       </table>
+      {total > 0 && (
+        <PaginationFooter
+          page={page}
+          perPage={perPage}
+          total={total}
+          onPageChange={setPage}
+          onPerPageChange={setPerPage}
+          label={t('leave.dashboard.applicationsLabel', { defaultValue: 'applications' })}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Shared pagination footer for the dashboard's server-paginated tables.
+// ---------------------------------------------------------------------------
+
+const DASHBOARD_PAGE_SIZES = [10, 25, 50];
+
+function PaginationFooter({
+  page,
+  perPage,
+  total,
+  onPageChange,
+  onPerPageChange,
+  label,
+}: {
+  page: number;
+  perPage: number;
+  total: number;
+  onPageChange: (p: number) => void;
+  onPerPageChange: (n: number) => void;
+  label: string;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-3 border-t border-gray-200 text-sm text-gray-600">
+      <div className="flex items-center gap-2">
+        <span>Show</span>
+        <select
+          value={perPage}
+          onChange={(e) => onPerPageChange(Number(e.target.value))}
+          className="px-2 py-1 border border-gray-300 rounded text-sm bg-white"
+          aria-label="Rows per page"
+        >
+          {DASHBOARD_PAGE_SIZES.map((n) => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </select>
+        <span>per page · {total} {label}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <span>Page {page} of {totalPages}</span>
+        <button
+          type="button"
+          onClick={() => onPageChange(Math.max(1, page - 1))}
+          disabled={page <= 1}
+          className="px-3 py-1 border border-gray-300 rounded disabled:opacity-40"
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          onClick={() => onPageChange(page + 1)}
+          disabled={page >= totalPages}
+          className="px-3 py-1 border border-gray-300 rounded disabled:opacity-40"
+        >
+          Next
+        </button>
+      </div>
     </div>
   );
 }

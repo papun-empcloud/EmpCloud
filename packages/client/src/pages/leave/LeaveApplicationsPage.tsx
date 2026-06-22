@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "@/api/client";
 import { useAuthStore } from "@/lib/auth-store";
 import { leaveTypeLabel } from "@/lib/leave-type-label";
-import { CheckCircle2, XCircle, Clock, Ban, Filter } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, Ban, Filter, Search } from "lucide-react";
 
 interface LeaveApplication {
   id: number;
@@ -41,14 +41,37 @@ export default function LeaveApplicationsPage() {
   const canApprove = user ? HR_ROLES.includes(user.role) : false;
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState("");
+  // Free-text search by employee name / email / code. Debounced into
+  // `appliedSearch` so we don't fire a request on every keystroke; the
+  // backend's /leave/applications endpoint matches on the same three fields.
+  const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
   const [remarks, setRemarks] = useState("");
   const [actionId, setActionId] = useState<number | null>(null);
 
+  useEffect(() => {
+    const id = setTimeout(() => setAppliedSearch(search.trim()), 300);
+    return () => clearTimeout(id);
+  }, [search]);
+
+  // A new search term changes the result set, so jump back to the first page
+  // to avoid landing on an out-of-range page that renders empty.
+  useEffect(() => {
+    setPage(1);
+  }, [appliedSearch]);
+
   const { data, isLoading } = useQuery({
-    queryKey: ["leave-applications", page, statusFilter],
+    queryKey: ["leave-applications", page, statusFilter, appliedSearch],
     queryFn: () =>
       api
-        .get("/leave/applications", { params: { page, per_page: 20, status: statusFilter || undefined } })
+        .get("/leave/applications", {
+          params: {
+            page,
+            per_page: 20,
+            status: statusFilter || undefined,
+            search: appliedSearch || undefined,
+          },
+        })
         .then((r) => r.data),
   });
 
@@ -132,19 +155,31 @@ export default function LeaveApplicationsPage() {
       )}
 
       {/* Filters */}
-      <div className="flex items-center gap-3 mb-4">
-        <Filter className="h-4 w-4 text-gray-400" />
-        <select
-          value={statusFilter}
-          onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
-          className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-        >
-          <option value="">{t("leave.applications.allStatuses")}</option>
-          <option value="pending">{t("leave.applications.status.pending")}</option>
-          <option value="approved">{t("leave.applications.status.approved")}</option>
-          <option value="rejected">{t("leave.applications.status.rejected")}</option>
-          <option value="cancelled">{t("leave.applications.status.cancelled")}</option>
-        </select>
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t("leave.applications.searchPlaceholder", { defaultValue: "Search by name, email, or code" })}
+            className="pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm w-72"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <Filter className="h-4 w-4 text-gray-400" />
+          <select
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+          >
+            <option value="">{t("leave.applications.allStatuses")}</option>
+            <option value="pending">{t("leave.applications.status.pending")}</option>
+            <option value="approved">{t("leave.applications.status.approved")}</option>
+            <option value="rejected">{t("leave.applications.status.rejected")}</option>
+            <option value="cancelled">{t("leave.applications.status.cancelled")}</option>
+          </select>
+        </div>
       </div>
 
       {/* Table */}
@@ -176,7 +211,18 @@ export default function LeaveApplicationsPage() {
                     back to the All view so the user can see their other
                     leaves instead of staring at an empty table.
                   */}
-                  {statusFilter ? (
+                  {appliedSearch ? (
+                    <span>
+                      {t("leave.applications.noSearch", { defaultValue: 'No applications match "{{term}}".', term: appliedSearch })}{" "}
+                      <button
+                        type="button"
+                        onClick={() => setSearch("")}
+                        className="text-brand-600 hover:underline font-medium"
+                      >
+                        {t("leave.applications.clearSearch", { defaultValue: "Clear search" })}
+                      </button>
+                    </span>
+                  ) : statusFilter ? (
                     <span>
                       {t("leave.applications.noFiltered", { status: t(`leave.applications.status.${statusFilter}`) })}{" "}
                       <button
